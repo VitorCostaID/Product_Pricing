@@ -1,12 +1,11 @@
 import asyncio
 import json
 import re
-from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
+from seleniumbase import sb_cdp
 
-HEADERS = {
-    "Accept-Language": "pt-BR,pt;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
+sb = sb_cdp.Chrome()
+endpoint_url = sb.get_endpoint_url()
 
 # Helpers
 def clean_price(raw: str) -> float | None:
@@ -48,189 +47,103 @@ def clean_price(raw: str) -> float | None:
         return None
     except ValueError:
         return None
-
-
-# Mercado Livre
-async def scrape_mercadolivre(page, query: str, max_results: int) -> list[dict]:
-    results = []
-    url = f"https://lista.mercadolivre.com.br/{query.replace(' ', '-')}"
-    print(f"  [Mercado Livre] Fetching: {url}")
-
-    # wait_until="networkidle" handles redirects properly
-    await page.goto(url, wait_until="networkidle", timeout=40000)
-    await page.wait_for_timeout(2000)
-
-    items = await page.query_selector_all("li.ui-search-layout__item")
-    print(f"  [Mercado Livre] Found {len(items)} raw items")
-
-    for item in items[:max_results]:
-        try:
-            # Title + link are on the same <a> tag
-            link_el = await item.query_selector("a.poly-component__title")
-            price_int_el = await item.query_selector("span.andes-money-amount__fraction")
-            price_dec_el = await item.query_selector("span.andes-money-amount__cents")
-
-            if not link_el or not price_int_el:
-                continue
-
-            title = (await link_el.inner_text()).strip()
-            link = await link_el.get_attribute("href") or ""
-
-            price_int = (await price_int_el.inner_text()).strip()
-            price_dec = (await price_dec_el.inner_text()).strip() if price_dec_el else "00"
-
-            price = clean_price(f"{price_int},{price_dec}")
-            if price is None:
-                continue
-
-            results.append({
-                "marketplace": "Mercado Livre",
-                "title": title,
-                "price": price,
-                "url": link,
-            })
-        except Exception as e:
-            print(f"  [Mercado Livre] Error parsing item: {e}")
-            continue
-
-    return results
-
-
-# Amazon BR
-async def scrape_amazon(page, query: str, max_results: int) -> list[dict]:
-    results = []
-    url = f"https://www.amazon.com.br/s?k={query.replace(' ', '+')}"
-    print(f"  [Amazon BR] Fetching: {url}")
-
-    await page.goto(url, wait_until="networkidle", timeout=40000)
-    await page.wait_for_timeout(2000)
-
-    items = await page.query_selector_all("div[data-component-type='s-search-result']")
-    print(f"  [Amazon BR] Found {len(items)} raw items")
-
-    for item in items[:max_results]:
-        try:
-            title_el = await item.query_selector("h2 span")
-            # a-offscreen contains the clean price string, e.g. "R$\xa01.299,90"
-            price_el = await item.query_selector("span.a-price > span.a-offscreen")
-            link_el = await item.query_selector("h2 a")
-
-            if not title_el or not price_el:
-                continue
-
-            title = (await title_el.inner_text()).strip()
-            raw_price = (await price_el.inner_text()).strip()
-            price = clean_price(raw_price)
-            if price is None:
-                continue
-
-            href = await link_el.get_attribute("href") if link_el else ""
-            link = f"https://www.amazon.com.br{href}" if href.startswith("/") else href
-
-            results.append({
-                "marketplace": "Amazon BR",
-                "title": title,
-                "price": price,
-                "url": link,
-            })
-        except Exception as e:
-            print(f"  [Amazon BR] Error parsing item: {e}")
-            continue
-
-    return results
-
-
-# Magalu
-async def scrape_magalu(page, query: str, max_results: int) -> list[dict]:
-    results = []
-    url = f"https://www.magazineluiza.com.br/busca/{query.replace(' ', '%20')}/"
-    print(f"  [Magalu] Fetching: {url}")
-
-    await page.goto(url, wait_until="networkidle", timeout=40000)
-    await page.wait_for_timeout(3000)
-
-    # Primary selector
-    items = await page.query_selector_all("a[data-testid='product-card-container']")
-
-    # Fallback
-    if not items:
-        items = await page.query_selector_all("li[data-testid='product-item'] a")
-
-    print(f"  [Magalu] Found {len(items)} raw items")
-
-    for item in items[:max_results]:
-        try:
-            title_el = await item.query_selector("[data-testid='product-title']")
-            price_el = await item.query_selector("[data-testid='price-value']")
-
-            # Fallback selectors
-            if not title_el:
-                title_el = await item.query_selector("h2, h3, [class*='Title'], [class*='title']")
-            if not price_el:
-                price_el = await item.query_selector("[class*='price'], [class*='Price'], [class*='valor']")
-
-            if not title_el or not price_el:
-                continue
-
-            title = (await title_el.inner_text()).strip()
-            raw_price = (await price_el.inner_text()).strip()
-            price = clean_price(raw_price)
-            if price is None:
-                continue
-
-            link = await item.get_attribute("href") or ""
-            if link.startswith("/"):
-                link = f"https://www.magazineluiza.com.br{link}"
-
-            results.append({
-                "marketplace": "Magalu",
-                "title": title,
-                "price": price,
-                "url": link,
-            })
-        except Exception as e:
-            print(f"  [Magalu] Error parsing item: {e}")
-            continue
-
-    return results
-
-
-# Diagnostic helper
-async def diagnose(url: str, selector: str):
-    """
-    Opens a VISIBLE browser so you can see what's happening,
-    then prints the text of the first 3 matched elements.
-
-    Example usage at the bottom of this file:
-        asyncio.run(diagnose("https://www.magazineluiza.com.br/busca/Samsung%20Galaxy%20A15/", "a[data-testid='product-card-container']"))
-    """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(locale="pt-BR")
-        page = await context.new_page()
-        await page.goto(url, wait_until="networkidle", timeout=40000)
-        await page.wait_for_timeout(3000)
-        items = await page.query_selector_all(selector)
-        print(f"\nSelector '{selector}' matched {len(items)} elements")
-        for i, el in enumerate(items[:3]):
-            print(f"\n--- Element {i+1} ---")
-            print(await el.inner_text())
-        input("\nBrowser is open — press Enter to close...")
-        await browser.close()
-
+    
 
 # ---------------------------------------------------------------------------
 # Main scraper orchestrator
 # ---------------------------------------------------------------------------
 
-SCRAPERS = {
-    "mercadolivre": scrape_mercadolivre,
-    "amazon": scrape_amazon,
-    "magalu": scrape_magalu,
+def get_results(page, compact: list, search: str, max_results: int):
+    """ Take the link, the search bar, goes to the link, click on the bar,
+        Fill the bar search, keyboard confirm, get all the elements.
+    """
+    link = compact[0]
+    search_bar = compact[1]
+    page.goto(link)
+    page.click(search_bar)
+    page.fill(search_bar, search)
+    page.keyboard.press("Enter") 
+    page.wait_for_timeout(4000)
+    
+    # Locate all individual product card elements
+    found_products = page.locator('li.ui-search-layout__item').all()
+    print(f"Products list found. Total elements located: {len(found_products)}")
+    
+    products_data_list = []
+    product_count = 0
+
+    # Iterate through the located cards up to the max_results limit
+    for product_card in found_products[:max_results]:
+        product_count += 1
+        print(f"\n--- Processing Product Number: {product_count} ---")
+        
+        try:
+            # 1. Extract Title
+            title = product_card.locator('a.poly-component__title').first.inner_text()
+            
+            # 2. Extract Product Link
+            product_link = product_card.locator('a.poly-component__title').first.get_attribute('href')
+            
+            # 3. Extract Rating (with a fallback if it doesn't exist)
+            try:
+                rating = product_card.locator('span.polylabel-label').first.inner_text()
+            except:
+                rating = "No rating available"
+            
+            # 4. Extract Price
+            # We target the element holding the aria-label attribute for a clean string
+            price_element = product_card.locator('.poly-price__current span[role="img"]').first
+            if price_element.count() > 0:
+                current_price = price_element.get_attribute('aria-label')
+            else:
+                current_price = "Price unavailable"
+            
+            # 5. Extract Item Condition
+            try:
+                condition = product_card.locator('span.poly-component__item-condition').first.inner_text()
+            except:
+                condition = "New"
+            
+            # 6. Extract Shipping Information
+            try:
+                shipping = product_card.locator('.poly-component__shipping-v2').first.inner_text().strip()
+            except:
+                shipping = "Not specified"
+
+            # Structure the extracted data into a dictionary
+            product_details = {
+                "title": title,
+                "link": product_link,
+                "rating": rating,
+                "price": current_price,
+                "condition": condition,
+                "shipping": shipping
+            }
+            
+            # Append to the final list and display the successful result
+            products_data_list.append(product_details)
+            print(f"Successfully scraped: {product_details['title']}")
+            print(product_details)
+            
+        except Exception as error:
+            # This will now print the exact error message if the scraping fails for a card
+            print(f"❌ Failed to scrape product number {product_count}. Error: {error}")
+            continue 
+
+    # Close the page after the loop finishes processing all items
+    page.close() 
+    
+    #return products_data_list
+
+
+LINKS = {
+    "mercadolivre": ["https://lista.mercadolivre.com.br/", "#cb1-edit"],
+    "amazon": ["https://www.amazon.com.br/"],
+    "magalu": ["https://www.magazineluiza.com.br/"],
 }
 
 
-async def run_scraper(
+def run_scraper(
     query: str,
     marketplaces: list[str],
     max_results: int = 10,
@@ -242,35 +155,28 @@ async def run_scraper(
     """
     all_results = []
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            extra_http_headers=HEADERS,
-            locale="pt-BR",
-        )
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp(endpoint_url)
+        page = browser.contexts[0].pages[0]
 
+        # Test if the marketplace is at dictionary
         for mp in marketplaces:
             mp_key = mp.lower()
-            if mp_key not in SCRAPERS:
+            link = LINKS[mp]
+            if mp_key not in LINKS:
                 print(f"  [!] Unknown marketplace: {mp_key}, skipping.")
                 continue
 
-            page = await context.new_page()
             try:
-                results = await SCRAPERS[mp_key](page, query, max_results)
+                results = get_results(page, link, query, max_results)
                 print(f"  [{mp_key}] Collected {len(results)} valid listings")
                 all_results.extend(results)
             except Exception as e:
                 print(f"  [{mp_key}] Scraper failed: {e}")
             finally:
-                await page.close()
+                page.close()
 
-        await browser.close()
+        browser.close()
 
     return all_results
 
@@ -282,12 +188,12 @@ async def run_scraper(
 if __name__ == "__main__":
     query = "Samsung Galaxy A15"
     marketplaces = ["mercadolivre", "amazon", "magalu"]
-
     print(f"\nSearching for: '{query}'")
-    print(f"Marketplaces : {', '.join(marketplaces)}\n")
+    #print(f"Marketplaces : {', '.join(marketplaces)}\n")
 
-    results = asyncio.run(run_scraper(query, marketplaces, max_results=5))
+    run_scraper(query, marketplaces, max_results=5)
 
+    """
     print(f"\n{'='*60}")
     print(f"Total results collected: {len(results)}")
     print(f"{'='*60}\n")
@@ -298,4 +204,4 @@ if __name__ == "__main__":
     with open("scraper_output.json", "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
-    print("\nResults saved to scraper_output.json")
+    print("\nResults saved to scraper_output.json")"""

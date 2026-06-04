@@ -1,65 +1,21 @@
-import asyncio
-import os
-from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright.sync_api import sync_playwright
+from seleniumbase import sb_cdp
 
-# Path to your real Chrome profile — this uses your existing cookies/login
-CHROME_PROFILE = os.path.expanduser(
-    r"C:\Users\hsopg\AppData\Local\Google\Chrome\User Data"
-)
+sb = sb_cdp.Chrome()
+endpoint_url = sb.get_endpoint_url()
 
-async def diagnose():
-    async with async_playwright() as p:
-        # Use your real Chrome profile instead of a blank browser
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=CHROME_PROFILE,
-            headless=False,
-            channel="chrome",        # use your actual installed Chrome
-            locale="pt-BR",
-            args=["--profile-directory=Default"],
-        )
-
-        page = await context.new_page()
-        await stealth_async(page)
-
-        url = "https://lista.mercadolivre.com.br/Samsung-Galaxy-A15"
-        print(f"Opening: {url}")
-
-        # Wait for final navigation to settle
-        await page.goto(url, wait_until="networkidle", timeout=40000)
-        await page.wait_for_timeout(3000)
-
-        # Keep waiting until URL stops changing
-        prev_url = ""
-        for _ in range(10):
-            await page.wait_for_timeout(1000)
-            current_url = page.url
-            print(f"  Current URL: {current_url}")
-            if current_url == prev_url:
-                print("  URL settled.")
-                break
-            prev_url = current_url
-
-        print(f"\nFinal URL: {page.url}")
-
-        if "captcha" in page.url or "login" in page.url or "signup" in page.url:
-            print("\n  Blocked — redirected to login/captcha page.")
-        else:
-            print("\n  Clean page! Testing selectors...")
-            selectors = [
-                "li.ui-search-layout__item",
-                "a.poly-component__title",
-                "div.poly-card",
-                "ol.ui-search-layout > li",
-            ]
-            for sel in selectors:
-                try:
-                    items = await page.query_selector_all(sel)
-                    print(f"  {len(items):>3}  matches  →  {sel}")
-                except Exception as e:
-                    print(f"  ERR  →  {sel}  ({e})")
-
-        input("\nBrowser is open — inspect the page, then press Enter to close.")
-        await context.close()
-
-asyncio.run(diagnose())
+with sync_playwright() as p:
+    browser = p.chromium.connect_over_cdp(endpoint_url)
+    page = browser.contexts[0].pages[0]
+    page.goto("https://www.nike.com/")
+    page.click('[data-testid="user-tools-container"] search')
+    search = "Pegasus"
+    page.fill('input[type="search"]', search)
+    page.wait_for_timeout(4000)
+    details = 'ul[data-testid*="products"] figure .details'
+    items = page.locator(details)
+    if items:
+        print('**** Found results for "%s": ****' % search)
+    for i in range(items.count()):
+        item = items.nth(i)
+        print(item.inner_text())
