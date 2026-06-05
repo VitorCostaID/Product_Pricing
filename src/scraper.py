@@ -43,7 +43,7 @@ def get_results(page, references: list, search: str, max_results: int):
         
         product_details = {
             "title": title_el.get_text() if title_el else "Unknown",
-            #"link": title_el.get('href') if title_el else "#",
+            "link": title_el.get('href') if title_el else "#",
             "rating": rating_el.get_text() if rating_el else "No rating available",
             "price": price_el.get('aria-label') if price_el else "Price unavailable",
             "condition": condition_el.get_text() if condition_el else "New",
