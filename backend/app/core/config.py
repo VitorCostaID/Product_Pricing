@@ -4,18 +4,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────
-    DATABASE_URL: str
+    DATABASE_URL: str = "not_configured"
 
     # ── Security ──────────────────────────────────────────
-    SECRET_KEY: str
+    SECRET_KEY: str = "not_configured"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     ALGORITHM: str = "HS256"
 
     # ── App ───────────────────────────────────────────────
     ENVIRONMENT: str = "development"
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:5173"]
-
+    ALLOWED_ORIGINS: str = "http://localhost:5173"
+    
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

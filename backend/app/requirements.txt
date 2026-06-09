@@ -1,29 +1,34 @@
 # Web framework
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
+fastapi
+uvicorn[standard]
 
 # Database (async)
-sqlalchemy[asyncio]==2.0.35
-asyncpg==0.29.0
-alembic==1.13.2
+sqlalchemy[asyncio]
+asyncpg
+alembic
 
 # Auth
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.9
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
 
 # Validation & settings
-pydantic==2.8.2
-pydantic-settings==2.5.2
+pydantic
+pydantic-settings
 
 # HTTP client (for optional async scraping calls)
-httpx==0.27.2
+httpx
 
 # Scraping (keep aligned with your scraper.py deps)
-beautifulsoup4==4.12.3
-requests==2.32.3
+beautifulsoup4
+requests
 
 # Dev / test
-pytest==8.3.3
-pytest-asyncio==0.24.0
+pytest
+pytest-asyncio
 httpx  # also used as ASGI test client
+
+# Automation
+selenium 
+beautifulsoup4 
+playwright

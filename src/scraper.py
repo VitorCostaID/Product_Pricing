@@ -30,21 +30,19 @@ REFS = {
         "span.poly-component__item-condition", 
         ".poly-component__shipping-v2",
         "p.ui-pdp-description__content",                 # [8] Description
-        "p.ui-review-capability-comments__comment__text" # [9] Reviews
-
+        "img.poly-component__picture"
     ],
     
     "amazon": [
         "https://www.amazon.com.br/", 
         "#twotabsearchtextbox",                      # Amazon search bar ID
-        'div[data-component-type="s-search-result"]',                       # Amazon individual card wrapper
-        'a.a-text-normal',                         # Title anchor nested inside h2
+        'div[data-component-type="s-search-result"]', # Amazon individual card wrapper
+        'a.a-text-normal',                            # Title anchor nested inside h2
         'span.a-a-size-small',                        # Text holding rating star counts
         'span.a-price span.a-offscreen',              # Clean hidden text price string
         'span.a-badge-text',                          # Fallback tag wrapper
         "span[aria-label*='frete']"                   # Target element mentioning shipping
         "#productDescription",                       # [8] Description
-        "span[data-hook='review-body']"              # [9] Reviews
     ],
     
     "magalu": [
@@ -57,10 +55,8 @@ REFS = {
         "span.condition-placeholder",
         "div[data-testid='shipping-info']"
         "div[data-testid='product-description']",    # [8] Description (Example)
-        "p[data-testid='review-description']"        # [9] Reviews (Example)
     ]
 }
-
 async def fetch_deep_data(context, product_details: dict, references: list, semaphore: asyncio.Semaphore):
     """
     Helper function that visits the product page to grab descriptions and reviews.
@@ -69,7 +65,6 @@ async def fetch_deep_data(context, product_details: dict, references: list, sema
     # If the link is invalid, skip deep scraping
     if product_details["link"] == "#":
         product_details["description"] = "No link available"
-        product_details["reviews"] = []
         return product_details
 
     async with semaphore:
@@ -85,19 +80,10 @@ async def fetch_deep_data(context, product_details: dict, references: list, sema
             # Extract Description [8]
             desc_el = soup.select_one(references[8])
             product_details["description"] = desc_el.get_text(separator="\n").strip() if desc_el else "Description unavailable"
-            
-            # Extract Top 5 Reviews [9]
-            reviews = []
-            review_elements = soup.select(references[9])[:5]
-            for rev in review_elements:
-                reviews.append(rev.get_text(separator=" ").strip())
-                
-            product_details["reviews"] = reviews
 
         except Exception as e:
             print(f"  ❌ Error deep scraping {product_details['title'][:15]}: {e}")
             product_details["description"] = "Failed to extract"
-            product_details["reviews"] = []
         finally:
             await page.close()
             
@@ -118,9 +104,11 @@ async def get_results(page, references: list, search: str, max_results: int):
     # Wait until the search results structure is physically on the page
     await page.wait_for_selector(references[2])
     
-    # Grab raw HTML and close the browser immediately
+    # Grab raw HTML 
     html_content = await page.content()
-    await page.close()
+    
+    # Extract the parent context before doing anything else
+    context = page.context
     
     # Parse the HTML with the built-in parser
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -135,28 +123,30 @@ async def get_results(page, references: list, search: str, max_results: int):
         price_el = card.select_one(references[5])
         condition_el = card.select_one(references[6])
         shipping_el = card.select_one(references[7])
+        img_el = card.select_one(references[9])
 
         product_link = title_el.get('href') if title_el else "#"
-        product_link = f"{link}{product_link}"
+        if product_link.startswith("/"):
+            product_link = f"{link}{product_link}"
         
         product_details = {
-            "title": title_el.get_text() if title_el else "Unknown",
-            "link": title_el.get('href') if title_el else "#",
-            "rating": rating_el.get_text() if rating_el else "No rating available",
-            "price": price_el.get('aria-label') if price_el else "Price unavailable",
-            "condition": condition_el.get_text() if condition_el else "New",
+            "title": title_el.get_text().strip() if title_el else "Unknown",
+            "link": product_link,
+            "rating": rating_el.get_text().strip() if rating_el else "No rating available",
+            "price": price_el.get('aria-label').strip() if price_el and price_el.has_attr('aria-label') else (price_el.get_text().strip() if price_el else "Price unavailable"),
+            "condition": condition_el.get_text().strip() if condition_el else "New",
             "shipping": shipping_el.get_text().strip() if shipping_el else "Not specified",
             "description": "",
-            "reviews": []
+            "image": img_el.get('src') if img_el else "No image available"
         }
         products_data_list.append(product_details)
 
     # 3. Fire off the Deep Scrapers concurrently (Max 3 at a time)
     semaphore = asyncio.Semaphore(3)
 
-    # This creates a list of background tasks
+    # This creates a list of background tasks using the extracted browser context
     tasks = [
-        fetch_deep_data(page, product, references, semaphore)
+        fetch_deep_data(context, product, references, semaphore)
         for product in products_data_list
     ]
     
@@ -179,12 +169,10 @@ async def run_scraper(
 
     async with async_playwright() as p:
         browser = await p.chromium.connect_over_cdp(endpoint_url)
-        page = browser.contexts[0].pages[0]
 
         # Test if the marketplace is at dictionary
         for mp in marketplaces:
             mp_key = mp.lower()
-            link = REFS[mp]
             if mp_key not in REFS:
                 print(f"  [!] Unknown marketplace: {mp_key}, skipping.")
                 continue
@@ -226,11 +214,15 @@ if __name__ == "__main__":
     print(f"\nSearching for: '{query}'")
     print(f"Marketplaces : {', '.join(marketplaces)}\n")
 
-    final_data = asyncio.run(run_scraper(query, marketplaces, max_results=5))
+    try:
+        final_data = asyncio.run(run_scraper(query, marketplaces, max_results=5))
 
-    # Print the final enriched payload
-    for item in final_data:
-        print(f"\nTitle: {item['title']}")
-        print(f"Price: {item['price']}")
-        print(f"Description Snippet: {item['description'][:100]}...")
-        print(f"Total Reviews Pulled: {len(item['reviews'])}")
+        # Print the final enriched payload
+        for item in final_data:
+            print(f"\nTitle: {item['title']}")
+            print(f"Price: {item['price']}")
+            print(f"Description Snippet: {item['description'][:100]}...")
+            print(f"Total Reviews Pulled: {len(item['reviews'])}")
+    finally:
+        # Guarantee SeleniumBase disconnects cleanly from memory
+        sb.quit()

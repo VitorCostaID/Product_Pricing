@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, search
+from app.api.routes import search
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="PrecoBOT API",
+    title="Prodauto API",
     description="Scraping + price analysis for Brazilian marketplaces",
     version="0.1.0",
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
@@ -36,7 +36,7 @@ app.add_middleware(
 )
 
 # ── Routes ────────────────────────────────────────────────────────────────
-app.include_router(auth.router, prefix="/api/v1")
+#app.include_router(auth.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 
 
