@@ -6,8 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import search
 from app.core.config import get_settings
 
+import asyncio
+import sys
+
 settings = get_settings()
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

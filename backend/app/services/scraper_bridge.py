@@ -1,86 +1,67 @@
 """
-Bridge between FastAPI and the existing scraper.
+Scraper bridge — talks to the scraper server over HTTP.
 
-The scraper lives in /app/scraper_src/scraper.py (mounted by Docker).
-We import it at runtime so you can keep editing scraper.py without
-touching this file.
+The scraper server runs as a separate process on port 8001.
+This means Playwright runs in its own event loop, completely
+isolated from FastAPI. No more Windows event loop conflicts.
 
-product_details shape expected from scraper.py:
-  {
-    "title":     str,
-    "link":      str,
-    "rating":    str,
-    "price":     str,   ← the aria-label string, e.g. "R$ 1.299,90"
-    "condition": str,
-    "shipping":  str,
-    "image_url": str,   ← optional, add to your scraper when ready
-  }
+Start the scraper server before starting the backend:
+    python scraper_server.py
 """
-import asyncio
-import importlib.util
-import sys
-from pathlib import Path
-from typing import Any
+import httpx
 
 from app.services.analytics import parse_price_brl
 
-
-def _load_scraper():
-    """Dynamically import scraper.py from the mounted volume."""
-    scraper_path = Path("/app/scraper_src/scraper.py")
-
-    if not scraper_path.exists():
-        raise FileNotFoundError(
-            f"scraper.py not found at {scraper_path}. "
-            "Check that the ./src volume is mounted correctly in docker-compose.yml."
-        )
-
-    spec = importlib.util.spec_from_file_location("scraper", scraper_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["scraper"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _run_scraper_sync(
-    query: str,
-    marketplaces: list[str],
-    max_results: int,
-) -> list[dict[str, Any]]:
-    """Call run_scraper() synchronously (blocking)."""
-    scraper = _load_scraper()
-    return scraper.run_scraper(
-        query=query,
-        marketplaces=marketplaces,
-        max_results=max_results,
-    )
+SCRAPER_SERVER_URL = "http://127.0.0.1:8001"
+# Timeout in seconds — scraping can be slow, so we give it 2 minutes
+SCRAPER_TIMEOUT = 120.0
 
 
 async def run_scraper(
     query: str,
     marketplaces: list[str],
     max_results: int,
-) -> list[dict[str, Any]]:
+) -> list[dict]:
     """
-    Async wrapper: runs the blocking scraper in a thread pool so
-    FastAPI's event loop is never blocked.
-
-    Returns a list of product_details dicts enriched with price_brl.
+    Ask the scraper server to run a search and return results.
+    Raises a clear error if the scraper server is not running.
     """
-    loop = asyncio.get_running_loop()
-    raw_results: list[dict] = await loop.run_in_executor(
-        None,  # default ThreadPoolExecutor
-        _run_scraper_sync,
-        query,
-        marketplaces,
-        max_results,
-    )
+    payload = {
+        "query": query,
+        "marketplaces": marketplaces,
+        "max_results": max_results,
+    }
 
-    # Enrich each result with the parsed float price
+    async with httpx.AsyncClient(timeout=SCRAPER_TIMEOUT) as client:
+        try:
+            response = await client.post(
+                f"{SCRAPER_SERVER_URL}/scrape",
+                json=payload,
+            )
+            response.raise_for_status()
+
+        except httpx.ConnectError:
+            raise RuntimeError(
+                "Scraper server is not running. "
+                "Start it with: python scraper_server.py"
+            )
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"Scraper server returned an error: {e.response.text}"
+            )
+
+    raw_results: list[dict] = response.json()["results"]
+
+    # Normalise keys to match what the rest of the backend expects
     for item in raw_results:
+        # Parse the price string into a float
         item["price_brl"] = parse_price_brl(item.get("price"))
-        # Normalise key: scraper uses "price" (aria-label), we store as price_raw
-        item.setdefault("price_raw", item.pop("price", None))
+        # Rename "price" → "price_raw"
+        item["price_raw"] = item.pop("price", None)
+        # Rename "image" → "image_url" if your scraper uses that key
+        if "image" in item and "image_url" not in item:
+            item["image_url"] = item.pop("image")
         item.setdefault("image_url", None)
+        item.setdefault("marketplace", marketplaces[0])
 
     return raw_results

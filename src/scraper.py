@@ -2,9 +2,8 @@ import asyncio
 from playwright.async_api import async_playwright
 from seleniumbase import sb_cdp
 from bs4 import BeautifulSoup
-
-sb = sb_cdp.Chrome()
-endpoint_url = sb.get_endpoint_url()
+import subprocess
+import time
 
 
 REFS = { 
@@ -165,34 +164,51 @@ async def run_scraper(
     Returns a flat list of product dicts, each with:
         marketplace, title, price (float, BRL), url
     """
+    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+    subprocess.Popen([
+        chrome_path,
+        "--remote-debugging-port=9222",
+        "--user-data-dir=C:\\chrome-debug-profile",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ])
+
+    time.sleep(2)  # give Chrome time to start before Playwright connects
+    endpoint_url = "http://localhost:9222"
+
     all_results = []
 
-    async with async_playwright() as p:
-        browser = await p.chromium.connect_over_cdp(endpoint_url)
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(endpoint_url)
 
-        # Test if the marketplace is at dictionary
-        for mp in marketplaces:
-            mp_key = mp.lower()
-            if mp_key not in REFS:
-                print(f"  [!] Unknown marketplace: {mp_key}, skipping.")
-                continue
+            # Test if the marketplace is at dictionary
+            for mp in marketplaces:
+                mp_key = mp.lower()
+                if mp_key not in REFS:
+                    print(f"  [!] Unknown marketplace: {mp_key}, skipping.")
+                    continue
 
-            link = REFS[mp_key]
-            
-            # Open a clean tab profile container for each distinct marketplace
-            page = await browser.contexts[0].new_page()
+                link = REFS[mp_key]
+                
+                # Open a clean tab profile container for each distinct marketplace
+                page = await browser.contexts[0].new_page()
 
-            try:
-                results = await get_results(page, link, query, max_results)
-                print(f"  [{mp_key}] Collected {len(results)} valid listings")
-                all_results.extend(results)
-            except Exception as e:
-                print(f"  [{mp_key}] Scraper failed: {e}")
-            finally:
-                # Close the context window tab cleanly before moving to next site
-                await page.close()
+                try:
+                    results = await get_results(page, link, query, max_results)
+                    print(f"  [{mp_key}] Collected {len(results)} valid listings")
+                    all_results.extend(results)
+                except Exception as e:
+                    print(f"  [{mp_key}] Scraper failed: {e}")
+                finally:
+                    # Close the context window tab cleanly before moving to next site
+                    await page.close()
 
-        await browser.close()
+            await browser.close()
+    finally:
+        # Guarantee SeleniumBase disconnects cleanly from memory
+        subprocess.run(["taskkill", "/f", "/im", "chrome.exe"])
 
     return all_results
 
@@ -201,6 +217,7 @@ async def run_scraper(
 # Quick test
 # ---------------------------------------------------------------------------
 
+"""
 listed = ["mercadolivre", "amazon", "magalu"]
 check = [True, False, False]
 marketplaces = []
@@ -214,15 +231,11 @@ if __name__ == "__main__":
     print(f"\nSearching for: '{query}'")
     print(f"Marketplaces : {', '.join(marketplaces)}\n")
 
-    try:
-        final_data = asyncio.run(run_scraper(query, marketplaces, max_results=5))
+    final_data = asyncio.run(run_scraper(query, marketplaces, max_results=5))
 
-        # Print the final enriched payload
-        for item in final_data:
-            print(f"\nTitle: {item['title']}")
-            print(f"Price: {item['price']}")
-            print(f"Description Snippet: {item['description'][:100]}...")
-            print(f"Total Reviews Pulled: {len(item['reviews'])}")
-    finally:
-        # Guarantee SeleniumBase disconnects cleanly from memory
-        sb.quit()
+    # Print the final enriched payload
+    for item in final_data:
+        print(f"\nTitle: {item['title']}")
+        print(f"Price: {item['price']}")
+        print(f"Description Snippet: {item['description'][:100]}...")
+        print(f"Total Reviews Pulled: {len(item['reviews'])}")"""
