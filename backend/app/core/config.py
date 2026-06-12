@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # ── App ───────────────────────────────────────────────
     ENVIRONMENT: str = "development"
-    ALLOWED_ORIGINS: str = "http://localhost:5173"
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:5173"]
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
